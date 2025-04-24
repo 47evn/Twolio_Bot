@@ -6,17 +6,19 @@ import urllib.parse
 import re
 from datetime import datetime
 import json
+import os
+from dotenv import load_dotenv
+load_dotenv()
 
 app = Flask(__name__)
 
-# Twilio Credentials
-TWILIO_ACCOUNT_SID = "AC483d76a3d14c37b3504412f7a67a73dc"
-TWILIO_AUTH_TOKEN = "6c000387b609d9008c209005603e9f87"
-TWILIO_WHATSAPP_NUMBER = "whatsapp:+14155238886"
+TWILIO_ACCOUNT_SID = os.getenv("TWILIO_ACCOUNT_SID")
+TWILIO_AUTH_TOKEN = os.getenv("TWILIO_AUTH_TOKEN")
+TWILIO_WHATSAPP_NUMBER = os.getenv("TWILIO_WHATSAPP_NUMBER")
 
-# Gemini API Key
-GOOGLE_API_KEY = "AIzaSyD52ImyueMUNql1-uCbbgEK4Ie9K14JRUI"
+GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY")
 genai.configure(api_key=GOOGLE_API_KEY)
+
 model = genai.GenerativeModel("gemini-1.5-flash")
 
 # Twilio client
