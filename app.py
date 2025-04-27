@@ -10,6 +10,11 @@ import os
 from dotenv import load_dotenv
 load_dotenv()
 
+import urllib3
+urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+
+
+
 app = Flask(__name__)
 
 TWILIO_ACCOUNT_SID = os.getenv("TWILIO_ACCOUNT_SID")
@@ -130,7 +135,7 @@ def authenticate_user(sender_number):
     headers = {"Content-Type": "application/json"}
 
     try:
-        auth_response = requests.post(AUTH_API_URL, json=auth_payload, headers=headers)
+        auth_response = requests.post(AUTH_API_URL, json=auth_payload, headers=headers, verify=False )
         auth_response.raise_for_status()
         auth_data = auth_response.json()
         auth_info = auth_data.get("auth", {})
@@ -168,7 +173,7 @@ def fetch_user_info(user_number, access_token):
     headers = {"Authorization": f"Bearer {access_token}"}
 
     try:
-        response = requests.get(url, headers=headers)
+        response = requests.get(url, headers=headers, verify=False )
         # Handle explicit "USER NOT FOUND." message
         if response.status_code == 404:
             data = response.json()
@@ -209,7 +214,7 @@ def fetch_info(endpoint, access_token):
     }
 
     try:
-        response = requests.get(info_url, headers=headers)
+        response = requests.get(info_url, headers=headers, verify=False )
         response.raise_for_status()
         data = response.json()
 
@@ -226,7 +231,7 @@ def fetch_group_info(group_id, access_token):
     url = GROUP_INFO_API_TEMPLATE.format(group_id)
     headers = {"Authorization": f"Bearer {access_token}"}
     try:
-        response = requests.get(url, headers=headers)
+        response = requests.get(url, headers=headers, verify=False )
         response.raise_for_status()
         return response.json()
     except Exception as e:
@@ -271,7 +276,7 @@ def fetch_appointments(user_id, access_token):
 
     try:
         # Send GET request with body (for this specific API, using requests.request() allows a GET with a body)
-        response = requests.get(url, headers=headers, json=data)  # JSON body with groupId
+        response = requests.get(url, headers=headers, json=data, verify=False )  # JSON body with groupId
         response.raise_for_status()
         
         appointments = response.json().get("appointments", [])
@@ -342,7 +347,7 @@ def fetch_user_personal_appointments(user_id, access_token):
 
     try:
         # Send GET request with body (for this specific API, using requests.request() allows a GET with a body)
-        response = requests.get(url, headers=headers, json=data)  # JSON body with groupId
+        response = requests.get(url, headers=headers, json=data, verify=False )  # JSON body with groupId
         response.raise_for_status()
         
         appointments = response.json().get("appointments", [])
