@@ -64,7 +64,7 @@ default_instruction = (
     "Once you receive the above requirements, please reply back with the message in the following format add nothing else in the reply message just the following format: APPOINTMENT BOOK PROFESSIONAL ID <professionals id> DATESTART <year-month-day> TIMESTART <hour:minute> USERID <the user id of the user>."
     "IMPORTANT: Upon receiving Professional ID, Date, and Time from the user for booknging, reply exclusively with: APPOINTMENT BOOK PROFESSIONAL ID <professionals id> DATESTART <year-month-day> TIMESTART <hour:minute> USERID <the user's id>. Add no other information or text to this reply."
     "IMPORTANT: If the user directly provides booking details (e.g., Professional ID : 13, Date start : 2025-04-15, Time Start : 12:00), do NOT display professional schedules. Instead, immediately respond with the exact format stated above."
-
+    "provide the list of professionals in a professional and organized way, not the JSON format."
     "IMPORTANT: When the user provides the booking details (e.g., Professional ID : 13, Date start : 15-4-25, Time Start : 12:00), DO NOT just show the professional schedule, "
     "If the user asks about the following endpoints, respond with 'INFO: <endpoint>' in the order of the list. The bot should only respond with the endpoint and should not provide any other information:"
     "INFO: payments/security"
@@ -248,7 +248,8 @@ def fetch_professionals(access_token):
         "Content-Type": "application/json"
     } 
     payload = {
-        "groupId": int(group_id)
+        "groupId": int(group_id),
+        "format":"whatsapp"
     }
 
     try:
@@ -383,44 +384,47 @@ def whatsapp():
             # Registration flow for unregistered users
             if isinstance(user_info, dict) and user_info.get("error") == "USER_NOT_FOUND":
                 state = registration_state.get(sender_number)
-                # Prompted to register
-                if state == 'prompted':
-                    if incoming_msg.lower().startswith("yes"):
-                        registration_state[sender_number] = 'awaiting_form'
-                        registration_data[sender_number] = {"phone": sender_number}
-                        send_reply(sender_number,
-                                  "Please fill out this form:\n"
-                                  "Name:\n"
-                                  "Surname:\n"
-                                  "Alias:\n"
-                                  "Email:\n"
-                                  f"Phone number: {sender_number}")
-                    else:
-                        registration_state.pop(sender_number, None)
-                        send_reply(sender_number, "Okay, if you change your mind, just let me know.")
+
+                # First unregistered interaction: forward to Gemini
+                if state is None:
+                    registration_state[sender_number] = 'ask_name'
+                    reply_text = "You are not registered. What is your name?"
+                    send_reply(sender_number, reply_text)
                     return "Message sent", 200
 
-                # Awaiting form submission
-                if state == 'awaiting_form':
-                    lines = incoming_msg.splitlines()
-                    data = {}
-                    for line in lines:
-                        if ':' in line:
-                            k, v = line.split(':', 1)
-                            data[k.strip().lower()] = v.strip()
-                    name = data.get('name')
-                    surname = data.get('surname')
-                    alias = data.get('alias')
-                    email = data.get('email')
-                    if not all([name, surname, alias, email]):
-                        send_reply(sender_number, "Please provide all fields: Name, Surname, Alias, Email.")
+                # Asking for name
+                elif state == 'ask_name':
+                    registration_data[sender_number] = {"name": incoming_msg}
+                    registration_state[sender_number] = 'ask_surname'
+                    reply_text = "Thanks! Now, what is your surname?"
+                    send_reply(sender_number, reply_text)
+                    return "Message sent", 200
+
+                # Asking for surname
+                elif state == 'ask_surname':
+                    registration_data[sender_number]["surname"] = incoming_msg
+                    registration_state[sender_number] = 'ask_email'
+                    reply_text = "Great! Now, what is your email?"
+                    send_reply(sender_number, reply_text)
+                    return "Message sent", 200
+
+                # Asking for email and completing registration
+                elif state == 'ask_email':
+                    registration_data[sender_number]["email"] = incoming_msg
+                    name = registration_data[sender_number].get('name')
+                    surname = registration_data[sender_number].get('surname')
+                    email = registration_data[sender_number].get('email')
+                    phone_number = sender_number
+
+                    if not all([name, surname, email, phone_number]):
+                        send_reply(sender_number, "Please provide all fields: Name, Surname, Email.")
                         return "Message sent", 200
+
                     payload = {
                         "groupId": 3,
                         "name": name,
                         "surname": surname,
-                        "alias": alias,
-                        "phone_number": sender_number,
+                        "phone_number": phone_number,
                         "email": email
                     }
                     result = register_user(payload, access_token)
@@ -432,19 +436,6 @@ def whatsapp():
                     registration_data.pop(sender_number, None)
                     return "Message sent", 200
 
-                # First unregistered interaction: forward to Gemini
-                prompt = f"{default_instruction}\n\nUser: {incoming_msg}"
-                gemini_response = model.generate_content(prompt)
-                temp_reply = gemini_response.text.strip()
-                if temp_reply.startswith("INFO:"):
-                    endpoint = temp_reply.split("INFO: ", 1)[1].strip()
-                    info_msg = fetch_info(endpoint, access_token)
-                    reply_text = info_msg
-                else:
-                    registration_state[sender_number] = 'prompted'
-                    reply_text = "YOU ARE NOT REGISTERED. WANT TO REGISTER AS A NEW USER ?"
-                send_reply(sender_number, reply_text)
-                return "Message sent", 200
 
             # Registered-user flow (unchanged)
             group_info = fetch_group_info(group_id, access_token)
