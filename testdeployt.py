@@ -478,58 +478,48 @@ def whatsapp():
             gemini_response = model.generate_content(full_prompt)
             reply_text = gemini_response.text.strip()
 
-            # If the reply contains appointment booking, extract the professional ID and slot details
+            if reply_text.startswith("INFO:"):
+                endpoint = reply_text.split("INFO: ", 1)[1].strip()
+                reply_text = fetch_info(endpoint, access_token)
+
             appointment_match = re.match(
-                r"PROFESSIONAL SLOT NEEDED (\d+)", reply_text
+                r"APPOINTMENT BOOK PROFESSIONAL ID (\d+) DATESTART (\d{4}-\d{2}-\d{2}) TIMESTART (\d{2}:\d{2}) USERID (\d+)",
+                reply_text
             )
             if appointment_match:
-                pid = appointment_match.group(1)
-                slots_url = f"https://bi.siissoft.com/secureappointment/api/v1/slots/{group_id}?professionalId={pid}"
-                try:
-                    resp = requests.get(slots_url, headers={"Authorization": f"Bearer {access_token}"})
-                    resp.raise_for_status()
-                    slots_data = resp.json().get("slots", {})
-                    formatted = format_slots(slots_data)
-                    reply_text = (
-                        f"Here are the available slots for Professional ID {pid}:\n{formatted}"
-                        if formatted else
-                        "No available slots found for the selected professional."
-                    )
-                except Exception as e:
-                    print(f"❌ Failed to fetch slots: {e}")
-                    reply_text = "Sorry, there was an error fetching available slots. Please try again later."
-                send_reply(sender_number, reply_text)
-                return "Message sent", 200
-
-            # After the user selects a time, ask for the date and time in the specified format
-            if "available slots" in reply_text.lower():
-                # Ask for the date
-                send_reply(sender_number, "Please provide the date for your appointment in the format: <year-month-day> (e.g., 2025-04-15).")
-                return "Message sent", 200
-
-            # Date handling after user responds with the date
-            if re.match(r"\d{4}-\d{2}-\d{2}", incoming_msg):  # Check if the user input is in correct date format
-                date = incoming_msg.strip()
-                send_reply(sender_number, f"Thank you! Now, please provide the time for your appointment in the format: <hour:minute> (e.g., 14:30).")
-                return "Message sent", 200
-
-            # Time handling after user responds with the time
-            if re.match(r"\d{2}:\d{2}", incoming_msg):  # Check if the user input is in correct time format
-                time = incoming_msg.strip()
-                # Book the appointment
-                appointment_details = {
+                pid, ds, ts, uid = appointment_match.groups()
+                formatted_date, formatted_time = format_date_time(ds, ts)
+                details = {
                     "groupId": group_id,
-                    "professionalId": 0,  # Set the professional ID to 0 as requested
-                    "userId": user_id,
-                    "dateStart": date,
-                    "timeStart": time
+                    "professionalId": int(pid),
+                    "userId": int(uid),
+                    "dateStart": formatted_date,
+                    "timeStart": formatted_time
                 }
-                success = book_appointment(appointment_details, access_token)
-                if success:
-                    send_reply(sender_number, f"Your appointment has been successfully booked for {date} at {time}.")
-                else:
-                    send_reply(sender_number, "The requested time slot is already occupied. Please choose another time.")
-                return "Message sent", 200
+                success = book_appointment(details, access_token)
+                reply_text = (
+                    f"Your appointment has been successfully booked with Professional ID {pid} for {formatted_date} at {formatted_time}."
+                    if success else
+                    "The requested time slot is already occupied. Please choose another time."
+                )
+            else:
+                slot_match = re.match(r"PROFESSIONAL SLOT NEEDED (\d+)", reply_text)
+                if slot_match:
+                    pid = slot_match.group(1)
+                    slots_url = f"https://bi.siissoft.com/secureappointment/api/v1/slots/{group_id}?professionalId={pid}"
+                    try:
+                        resp = requests.get(slots_url, headers={"Authorization": f"Bearer {access_token}"})
+                        resp.raise_for_status()
+                        slots_data = resp.json().get("slots", {})
+                        formatted = format_slots(slots_data)
+                        reply_text = (
+                            f"Here are the available slots for Professional ID {pid}:\n{formatted}"
+                            if formatted else
+                            "No available slots found for the selected professional."
+                        )
+                    except Exception as e:
+                        print(f"❌ Failed to fetch slots: {e}")
+                        reply_text = "Sorry, there was an error fetching available slots. Please try again later."
 
     except Exception as e:
         print(f"⚠️ Error handling message: {e}")
