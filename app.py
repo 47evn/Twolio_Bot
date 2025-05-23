@@ -64,7 +64,7 @@ default_instruction = (
     "Once you receive the above requirements, please reply back with the message in the following format add nothing else in the reply message just the following format: APPOINTMENT BOOK PROFESSIONAL ID <professionals id> DATESTART <year-month-day> TIMESTART <hour:minute> USERID <the user id of the user>."
     "IMPORTANT: Upon receiving Professional ID, Date, and Time from the user for booknging, reply exclusively with: APPOINTMENT BOOK PROFESSIONAL ID <professionals id> DATESTART <year-month-day> TIMESTART <hour:minute> USERID <the user's id>. Add no other information or text to this reply."
     "IMPORTANT: If the user directly provides booking details (e.g., Professional ID : 13, Date start : 2025-04-15, Time Start : 12:00), do NOT display professional schedules. Instead, immediately respond with the exact format stated above."
-
+    "provide the list of professionals in a professional and organized way, not the JSON format."
     "IMPORTANT: When the user provides the booking details (e.g., Professional ID : 13, Date start : 15-4-25, Time Start : 12:00), DO NOT just show the professional schedule, "
     "If the user asks about the following endpoints, respond with 'INFO: <endpoint>' in the order of the list. The bot should only respond with the endpoint and should not provide any other information:"
     "INFO: payments/security"
@@ -248,7 +248,8 @@ def fetch_professionals(access_token):
         "Content-Type": "application/json"
     } 
     payload = {
-        "groupId": int(group_id)
+        "groupId": int(group_id),
+        "format":"whatsapp"
     }
 
     try:
@@ -360,7 +361,6 @@ def fetch_user_personal_appointments(user_id, access_token):
     except Exception as e:
         print(f"❌ Failed to fetch personal appointments: {e}")
         return []
-
 @app.route("/whatsapp", methods=["POST"])
 def whatsapp():
     incoming_msg = request.values.get("Body", "").strip()
@@ -385,49 +385,46 @@ def whatsapp():
             if isinstance(user_info, dict) and user_info.get("error") == "USER_NOT_FOUND":
                 state = registration_state.get(sender_number)
 
-                # Prompted for registration (Yes/No)
-                if state == 'prompted':
-                    if incoming_msg.lower().startswith("yes"):
-                        registration_state[sender_number] = 'awaiting_form'
-                        registration_data[sender_number] = {"phone": sender_number}
-                        send_reply(sender_number,
-                                "Please fill out this form:\n"
-                                "Name:\n"
-                                "Surname:\n"
-                                "Alias:\n"
-                                "Email:\n"
-                                f"Phone number: {sender_number}")
-                    elif incoming_msg.lower().startswith("no"):
-                        registration_state.pop(sender_number, None)
-                        registration_data.pop(sender_number, None)
-                        send_reply(sender_number, 
-                                "Thank you for contacting us. Come back any time if you need any further assistance. Hope to hear from you soon!")
-                    else:
-                        send_reply(sender_number, 
-                                "Please respond with 'Yes' to proceed with registration or 'No' to cancel.")
+                # First unregistered interaction: forward to Gemini
+                if state is None:
+                    registration_state[sender_number] = 'ask_name'
+                    reply_text = "You are not registered. What is your name?"
+                    send_reply(sender_number, reply_text)
                     return "Message sent", 200
 
-                # Awaiting form submission
-                if state == 'awaiting_form':
-                    lines = incoming_msg.splitlines()
-                    data = {}
-                    for line in lines:
-                        if ':' in line:
-                            k, v = line.split(':', 1)
-                            data[k.strip().lower()] = v.strip()
-                    name = data.get('name')
-                    surname = data.get('surname')
-                    alias = data.get('alias')
-                    email = data.get('email')
-                    if not all([name, surname, alias, email]):
-                        send_reply(sender_number, "Please provide all fields: Name, Surname, Alias, Email.")
+                # Asking for name
+                elif state == 'ask_name':
+                    registration_data[sender_number] = {"name": incoming_msg}
+                    registration_state[sender_number] = 'ask_surname'
+                    reply_text = "Thanks! Now, what is your surname?"
+                    send_reply(sender_number, reply_text)
+                    return "Message sent", 200
+
+                # Asking for surname
+                elif state == 'ask_surname':
+                    registration_data[sender_number]["surname"] = incoming_msg
+                    registration_state[sender_number] = 'ask_email'
+                    reply_text = "Great! Now, what is your email?"
+                    send_reply(sender_number, reply_text)
+                    return "Message sent", 200
+
+                # Asking for email and completing registration
+                elif state == 'ask_email':
+                    registration_data[sender_number]["email"] = incoming_msg
+                    name = registration_data[sender_number].get('name')
+                    surname = registration_data[sender_number].get('surname')
+                    email = registration_data[sender_number].get('email')
+                    phone_number = sender_number
+
+                    if not all([name, surname, email, phone_number]):
+                        send_reply(sender_number, "Please provide all fields: Name, Surname, Email.")
                         return "Message sent", 200
+
                     payload = {
                         "groupId": 3,
                         "name": name,
                         "surname": surname,
-                        "alias": alias,
-                        "phone_number": sender_number,
+                        "phone_number": phone_number,
                         "email": email
                     }
                     result = register_user(payload, access_token)
@@ -439,19 +436,6 @@ def whatsapp():
                     registration_data.pop(sender_number, None)
                     return "Message sent", 200
 
-                # First unregistered interaction: forward to Gemini
-                prompt = f"{default_instruction}\n\nUser: {incoming_msg}"
-                gemini_response = model.generate_content(prompt)
-                temp_reply = gemini_response.text.strip()
-                if temp_reply.startswith("INFO:"):
-                    endpoint = temp_reply.split("INFO: ", 1)[1].strip()
-                    info_msg = fetch_info(endpoint, access_token)
-                    reply_text = info_msg
-                else:
-                    registration_state[sender_number] = 'prompted'
-                    reply_text = "This seems to be your first time using our services. Would you like to proceed with a simple registration process? (Yes/No)"
-                send_reply(sender_number, reply_text)
-                return "Message sent", 200
 
             # Registered-user flow (unchanged)
             group_info = fetch_group_info(group_id, access_token)
@@ -478,58 +462,50 @@ def whatsapp():
             gemini_response = model.generate_content(full_prompt)
             reply_text = gemini_response.text.strip()
 
-            # If the reply contains appointment booking, extract the professional ID and slot details
+            if reply_text.startswith("INFO:"):
+                endpoint = reply_text.split("INFO: ", 1)[1].strip()
+                reply_text = fetch_info(endpoint, access_token)
+
+         
+
             appointment_match = re.match(
-                r"PROFESSIONAL SLOT NEEDED (\d+)", reply_text
+                r"APPOINTMENT BOOK PROFESSIONAL ID (\d+) DATESTART (\d{4}-\d{2}-\d{2}) TIMESTART (\d{2}:\d{2}) USERID (\d+)",
+                reply_text
             )
             if appointment_match:
-                pid = appointment_match.group(1)
-                slots_url = f"https://bi.siissoft.com/secureappointment/api/v1/slots/{group_id}?professionalId={pid}"
-                try:
-                    resp = requests.get(slots_url, headers={"Authorization": f"Bearer {access_token}"})
-                    resp.raise_for_status()
-                    slots_data = resp.json().get("slots", {})
-                    formatted = format_slots(slots_data)
-                    reply_text = (
-                        f"Here are the available slots for Professional ID {pid}:\n{formatted}"
-                        if formatted else
-                        "No available slots found for the selected professional."
-                    )
-                except Exception as e:
-                    print(f"❌ Failed to fetch slots: {e}")
-                    reply_text = "Sorry, there was an error fetching available slots. Please try again later."
-                send_reply(sender_number, reply_text)
-                return "Message sent", 200
-
-            # After the user selects a time, ask for the date and time in the specified format
-            if "available slots" in reply_text.lower():
-                # Ask for the date
-                send_reply(sender_number, "Please provide the date for your appointment in the format: <year-month-day> (e.g., 2025-04-15).")
-                return "Message sent", 200
-
-            # Date handling after user responds with the date
-            if re.match(r"\d{4}-\d{2}-\d{2}", incoming_msg):  # Check if the user input is in correct date format
-                date = incoming_msg.strip()
-                send_reply(sender_number, f"Thank you! Now, please provide the time for your appointment in the format: <hour:minute> (e.g., 14:30).")
-                return "Message sent", 200
-
-            # Time handling after user responds with the time
-            if re.match(r"\d{2}:\d{2}", incoming_msg):  # Check if the user input is in correct time format
-                time = incoming_msg.strip()
-                # Book the appointment
-                appointment_details = {
+                pid, ds, ts, uid = appointment_match.groups()
+                formatted_date, formatted_time = format_date_time(ds, ts)
+                details = {
                     "groupId": group_id,
-                    "professionalId": 0,  # Set the professional ID to 0 as requested
-                    "userId": user_id,
-                    "dateStart": date,
-                    "timeStart": time
+                    "professionalId": 0,
+                    "userId": int(uid),
+                    "dateStart": formatted_date,
+                    "timeStart": formatted_time
                 }
-                success = book_appointment(appointment_details, access_token)
-                if success:
-                    send_reply(sender_number, f"Your appointment has been successfully booked for {date} at {time}.")
-                else:
-                    send_reply(sender_number, "The requested time slot is already occupied. Please choose another time.")
-                return "Message sent", 200
+                success = book_appointment(details, access_token)
+                reply_text = (
+                    f"Your appointment has been successfully booked with Professional ID {pid} for {formatted_date} at {formatted_time}."
+                    if success else
+                    "The requested time slot is already occupied. Please choose another time."
+                )
+            else:
+                slot_match = re.match(r"PROFESSIONAL SLOT NEEDED (\d+)", reply_text)
+                if slot_match:
+                    pid = slot_match.group(1)
+                    slots_url = f"https://bi.siissoft.com/secureappointment/api/v1/slots/{group_id}?professionalId={pid}"
+                    try:
+                        resp = requests.get(slots_url, headers={"Authorization": f"Bearer {access_token}"})
+                        resp.raise_for_status()
+                        slots_data = resp.json().get("slots", {})
+                        formatted = format_slots(slots_data)
+                        reply_text = (
+                            f"Here are the available slots for Professional ID {pid}:\n{formatted}"
+                            if formatted else
+                            "No available slots found for the selected professional."
+                        )
+                    except Exception as e:
+                        print(f"❌ Failed to fetch slots: {e}")
+                        reply_text = "Sorry, there was an error fetching available slots. Please try again later."
 
     except Exception as e:
         print(f"⚠️ Error handling message: {e}")
