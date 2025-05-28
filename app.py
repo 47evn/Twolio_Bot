@@ -150,6 +150,8 @@ def authenticate_user(sender_number):
         if not access_token or not refresh_token:
             return None
 
+
+
         print(f"🔐 [NEW] Access token for {sender_number}: {access_token}")
 
         user_sessions[sender_number] = {
